@@ -1,5 +1,5 @@
 # This file is part of the Wapiti project (https://wapiti-scanner.github.io)
-# Copyright (C) 2020-2023 Nicolas Surribas
+# Copyright (C) 2020-2025 Nicolas Surribas
 # Copyright (C) 2020-2024 Cyberwatch
 #
 # This program is free software; you can redistribute it and/or modify
@@ -130,6 +130,7 @@ class ModuleBruteLoginForm(Attack):
         return True
 
     async def attack(self, request: Request, response: Optional[Response] = None):
+        # First, we get the referer URL of the login request, we should find the login form there
         try:
             response = await self.crawler.async_send(Request(request.referer, "GET"), follow_redirects=True)
         except RequestError:
@@ -199,7 +200,7 @@ class ModuleBruteLoginForm(Attack):
                         username, password, response = result
                         vuln_message = f"Credentials found for URL {request.referer} : {username} / {password}"
 
-                        # Recreate the request that succeed in order to print and store it
+                        # Recreate the request that succeeds in order to print and store it
                         post_params = login_form.post_params
                         get_params = login_form.get_params
 
@@ -216,7 +217,8 @@ class ModuleBruteLoginForm(Attack):
                             post_params=post_params,
                             get_params=get_params,
                             referer=login_form.referer,
-                            link_depth=login_form.link_depth
+                            link_depth=login_form.link_depth,
+                            headers=response.sent_headers
                         )
 
                         await self.add_low(
@@ -235,7 +237,7 @@ class ModuleBruteLoginForm(Attack):
                 tasks.remove(task)
 
             if found:
-                # If we found valid credentials we need to stop pending tasks as they may generate false positives
+                # If we found valid credentials, we need to stop pending tasks as they may generate false positives
                 # because the session is opened on the website and next attempts may appear as logged in
                 for task in pending_tasks:
                     task.cancel()

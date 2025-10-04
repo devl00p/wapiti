@@ -231,8 +231,17 @@ class AsyncCrawler:
         @type timeout: float
         @rtype: Response
         """
+        final_headers = self._client.headers.copy()
+        request_specific_headers = resource.headers.copy()
+        if "cookie" in request_specific_headers:
+            del request_specific_headers["cookie"]
+        final_headers.update(request_specific_headers)
+
+        if headers:
+            final_headers.update(headers)
+
         timeout = self.timeout if timeout is None else httpx.Timeout(timeout)
-        request = self._client.build_request("GET", resource.url, headers=headers, timeout=timeout)
+        request = self._client.build_request("GET", resource.url, headers=final_headers, timeout=timeout)
         try:
             response = await self._client.send(
                 request, stream=stream, follow_redirects=follow_redirects
@@ -265,10 +274,14 @@ class AsyncCrawler:
         @type timeout: float
         @rtype: Response
         """
-        form_headers = {}
+        form_headers = self._client.headers.copy()
+        request_specific_headers = form.headers.copy()
+        if "cookie" in request_specific_headers:
+            del request_specific_headers["cookie"]
+        form_headers.update(request_specific_headers)
 
         if form.enctype and not form.is_multipart:
-            form_headers = {"Content-Type": form.enctype}
+            form_headers.setdefault("Content-Type", form.enctype)
 
         if isinstance(headers, (dict, httpx.Headers)) and headers:
             form_headers.update(headers)
@@ -326,16 +339,7 @@ class AsyncCrawler:
             timeout: float = None
     ) -> Response:
         if request.method == "GET":
-            response = await self.async_get(
-                request,
-                headers=headers,
-                follow_redirects=follow_redirects,
-                stream=stream,
-                timeout=timeout
-            )
-        else:
-            response = await self.async_request(
-                request.method,
+            return await self.async_get(
                 request,
                 headers=headers,
                 follow_redirects=follow_redirects,
@@ -343,9 +347,14 @@ class AsyncCrawler:
                 timeout=timeout
             )
 
-        request.set_cookies(self._client.cookies)
-        request.set_headers(response.sent_headers)
-        return response
+        return await self.async_request(
+            request.method,
+            request,
+            headers=headers,
+            follow_redirects=follow_redirects,
+            stream=stream,
+            timeout=timeout
+        )
 
     async def close(self):
         await self._client.aclose()

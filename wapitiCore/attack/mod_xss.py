@@ -141,6 +141,7 @@ class ModuleXss(Attack):
 
             try:
                 response = await self.crawler.async_send(evil_request)
+                evil_request.headers.update(response.sent_headers)
             except ReadTimeout:
                 self.network_errors += 1
                 if timeouted:

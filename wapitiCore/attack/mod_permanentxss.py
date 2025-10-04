@@ -198,7 +198,7 @@ class ModulePermanentxss(Attack):
             log_verbose(f"[¨] {evil_request}")
 
             try:
-                await self.crawler.async_send(evil_request)
+                injection_response = await self.crawler.async_send(evil_request)
             except ReadTimeout:
                 self.network_errors += 1
                 if timeouted:
@@ -247,7 +247,7 @@ class ModulePermanentxss(Attack):
                             taint
                         )
                 ):
-
+                    evil_request.headers.update(injection_response.sent_headers)
                     finding = StoredXssFinding if payload_info.injection_type == "javascript" else StoredHtmlFinding
                     if page == output_request.path:
                         description = (

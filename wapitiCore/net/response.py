@@ -43,6 +43,12 @@ class Response:
         @param response: a requests Response instance."""
         self._response = response
         self._url = url or str(self._response.url)
+        try:
+            self.sent_headers = response.request.headers
+        except RuntimeError:
+            # This happens when the httpx.Response was manually created for a test
+            # and has no associated request.
+            self.sent_headers = httpx.Headers()
 
     # TODO: Should I remove this ? If not set in __init__ returns _response.url which in turns use _response.request.url
     # and the request attribute may be None...
@@ -69,11 +75,6 @@ class Response:
         @rtype: dict
         """
         return self._response.headers
-
-    # TODO: try to remove this?
-    @property
-    def sent_headers(self) -> httpx.Headers:
-        return self._response.request.headers
 
     @property
     def cookies(self):
