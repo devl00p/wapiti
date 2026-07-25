@@ -301,10 +301,12 @@ async def test_passive_scanner_state_round_trip():
     # No state stored yet
     assert await persister.get_passive_scanner_state() == {}
 
+    # Mirrors PassiveModule.get_state: occurrences is a list of [key, count] pairs,
+    # and composite keys are lists (JSON has no tuple) — this must survive the blob.
     state = {
-        "csp": {"occurrences": {"a": 1, "b": 1}, "suppressed_findings": 2,
+        "csp": {"occurrences": [[["example.com", "CSP", "Missing"], 1]], "suppressed_findings": 2,
                 "suppressed_by_category": {"CSP": 2}},
-        "https_redirect": {"occurrences": {"example.com": 1}, "suppressed_findings": 0,
+        "https_redirect": {"occurrences": [["example.com", 1]], "suppressed_findings": 0,
                             "suppressed_by_category": {}},
     }
     await persister.set_passive_scanner_state(state)

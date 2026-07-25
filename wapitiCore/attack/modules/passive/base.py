@@ -72,19 +72,27 @@ class PassiveModule:
         A resumed crawl (``--resume-crawl``) re-instantiates every module with an
         empty state. Without restoring this snapshot the module would treat keys it
         already capped during the interrupted run as unseen and re-emit duplicate
-        alerts, while the suppression counters would restart from zero. The
-        deduplication keys are the callers' identifiers (hashes, hosts, strings) so
-        the whole snapshot is JSON-friendly.
+        alerts, while the suppression counters would restart from zero.
+
+        Deduplication keys are frequently tuples (e.g. ``(host, header, ...)``),
+        which JSON cannot use as object keys. Occurrences are therefore stored as a
+        list of ``[key, count]`` pairs — a tuple key becomes a JSON array and is
+        turned back into a tuple in :meth:`load_state`.
         """
         return {
-            "occurrences": dict(self._occurrences),
+            "occurrences": [[key, count] for key, count in self._occurrences.items()],
             "suppressed_findings": self.suppressed_findings,
             "suppressed_by_category": dict(self.suppressed_by_category),
         }
 
     def load_state(self, state: dict) -> None:
         """Restore a snapshot previously produced by :meth:`get_state`."""
-        self._occurrences = defaultdict(int, state.get("occurrences", {}))
+        occurrences: dict = defaultdict(int)
+        for key, count in state.get("occurrences", []):
+            # JSON has no tuple type: composite keys come back as lists and must be
+            # turned back into (hashable) tuples to match the keys modules generate.
+            occurrences[tuple(key) if isinstance(key, list) else key] = count
+        self._occurrences = occurrences
         self.suppressed_findings = state.get("suppressed_findings", 0)
         self.suppressed_by_category = defaultdict(int, state.get("suppressed_by_category", {}))
 

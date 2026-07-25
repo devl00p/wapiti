@@ -1,3 +1,5 @@
+import json
+
 from wapitiCore.attack.modules.passive.base import PassiveModule
 
 
@@ -59,7 +61,7 @@ def test_suppressions_without_category_only_bump_the_total():
     assert module.should_report("k") is False
 
     assert module.suppressed_findings == 1
-    assert dict(module.suppressed_by_category) == {}
+    assert not module.suppressed_by_category
 
 
 def test_state_round_trip_preserves_dedup_and_counters():
@@ -85,11 +87,33 @@ def test_state_round_trip_preserves_dedup_and_counters():
     assert restored.suppressed_findings == 3
 
 
+def test_state_round_trip_through_json_with_tuple_keys():
+    # Most modules deduplicate on tuple keys (e.g. (host, header, ...)), which JSON
+    # cannot use as object keys. The state must survive a real serialize/deserialize.
+    module = PassiveModule()
+    module.should_report(("example.com", "CSP", "Missing"), _FindingA)  # reported
+    module.should_report(("example.com", "CSP", "Missing"), _FindingA)  # suppressed
+    module.should_report("plain-string-key", _FindingB)  # reported
+
+    # Persistence path: get_state -> json blob -> back to a dict -> load_state
+    restored = PassiveModule()
+    restored.load_state(json.loads(json.dumps(module.get_state())))
+
+    assert restored.suppressed_findings == 1
+    assert dict(restored.suppressed_by_category) == {"Category A": 1}
+    # The tuple key is hashable again and still matches -> stays capped, no duplicate
+    assert restored.should_report(("example.com", "CSP", "Missing"), _FindingA) is False
+    # A plain string key round-trips as a string, not a tuple
+    assert restored.should_report("plain-string-key", _FindingB) is False
+    assert restored.suppressed_findings == 3
+
+
 def test_load_state_tolerates_missing_keys():
     module = PassiveModule()
     module.load_state({})
 
-    assert dict(module._occurrences) == {}
     assert module.suppressed_findings == 0
-    assert dict(module.suppressed_by_category) == {}
+    assert not module.suppressed_by_category
+    # Empty state behaves like a fresh module: nothing already capped.
     assert module.should_report("fresh") is True
+    assert module.should_report("fresh") is False
