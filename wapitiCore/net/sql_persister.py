@@ -199,28 +199,46 @@ class SqlPersister:
             self.root_url = value
             return value
 
-    SUPPRESSED_FINDINGS_KEY = "suppressed_findings"
+    async def get_suppressed_findings(self) -> Dict[str, int]:
+        """Return the per-category count of suppressed passive alerts.
 
-    async def set_suppressed_findings(self, counts: Dict[str, int]):
-        """Store, per vulnerability category, how many similar passive alerts were suppressed.
+        Derived from the persisted passive scanner state (the single source of
+        truth, see :meth:`get_passive_scanner_state`): every module records how many
+        alerts it suppressed per finding category, and the report — organized per
+        category, not per module — needs those totals aggregated across all modules.
+        Returns an empty dict when no passive state was stored.
+        """
+        state = await self.get_passive_scanner_state()
+        totals: Dict[str, int] = {}
+        for module_state in state.values():
+            for category, count in module_state.get("suppressed_by_category", {}).items():
+                totals[category] = totals.get(category, 0) + count
+        return totals
 
-        Kept in the generic ``scan_infos`` key/value table as a single JSON blob so
-        the report can surface it even when generated in a separate step. Overwrites
-        any previous value for this scan (upsert on the key).
+    PASSIVE_SCANNER_STATE_KEY = "passive_scanner_state"
+
+    async def set_passive_scanner_state(self, state: Dict[str, Any]):
+        """Persist the passive scanner's per-module anti-flood state.
+
+        Passive modules deduplicate alerts in memory (per-key occurrence counts and
+        suppression counters). A crawl interrupted and resumed with ``--resume-crawl``
+        restarts every module empty, so this snapshot is stored to let a resumed crawl
+        pick up where the previous one left off instead of re-reporting already-capped
+        alerts. Stored as a single JSON blob in ``scan_infos`` (upsert on the key).
         """
         async with self._engine.begin() as conn:
             await conn.execute(
-                self.scan_infos.delete().where(self.scan_infos.c.key == self.SUPPRESSED_FINDINGS_KEY)
+                self.scan_infos.delete().where(self.scan_infos.c.key == self.PASSIVE_SCANNER_STATE_KEY)
             )
             await conn.execute(self.scan_infos.insert().values(
-                key=self.SUPPRESSED_FINDINGS_KEY,
-                value=json.dumps(counts)
+                key=self.PASSIVE_SCANNER_STATE_KEY,
+                value=json.dumps(state)
             ))
 
-    async def get_suppressed_findings(self) -> Dict[str, int]:
-        """Return the per-category suppressed-alert counts, or an empty dict if none were stored."""
+    async def get_passive_scanner_state(self) -> Dict[str, Any]:
+        """Return the stored passive scanner state, or an empty dict if none was stored."""
         statement = select(self.scan_infos).where(
-            self.scan_infos.c.key == self.SUPPRESSED_FINDINGS_KEY
+            self.scan_infos.c.key == self.PASSIVE_SCANNER_STATE_KEY
         ).limit(1)
         async with self._engine.begin() as conn:
             result = await conn.execute(statement)

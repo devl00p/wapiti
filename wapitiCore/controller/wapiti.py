@@ -197,6 +197,11 @@ class Wapiti:
             )
 
     async def load_scan_state(self):
+        # Restore the passive scanner's per-module deduplication state so a resumed
+        # crawl (--resume-crawl) keeps capping alerts instead of re-reporting keys it
+        # already saw during the interrupted run. A no-op for a fresh scan (empty state).
+        await self._passive_scanner.restore_state()
+
         async for request in self.persister.get_to_browse():
             self._start_urls.append(request)
         async for request, __ in self.persister.get_links():
@@ -312,7 +317,10 @@ class Wapiti:
             await run_explorer(explorer)
 
         self._passive_scanner.log_summary()
-        await self._passive_scanner.persist_suppressed_findings()
+        # Persist the full anti-flood state: the occurrence counts so a later
+        # --resume-crawl keeps deduplicating from where this crawl stopped, and the
+        # per-category suppression counters the report derives from the same state.
+        await self._passive_scanner.persist_state()
 
     async def write_report(self):
         if not self.output_file:

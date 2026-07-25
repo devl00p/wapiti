@@ -261,7 +261,7 @@ async def test_raw_post():
 
 
 @pytest.mark.asyncio
-async def test_suppressed_findings_round_trip():
+async def test_suppressed_findings_derived_from_passive_state():
     try:
         os.unlink("/tmp/suppressed.db")
     except FileNotFoundError:
@@ -270,17 +270,48 @@ async def test_suppressed_findings_round_trip():
     persister = SqlPersister("/tmp/suppressed.db")
     await persister.create()
 
-    # No suppressed findings stored yet
+    # No passive state stored yet -> nothing suppressed
     assert await persister.get_suppressed_findings() == {}
 
-    await persister.set_suppressed_findings({"Content Security Policy Configuration": 5, "HSTS": 2})
+    # The report's per-category totals are aggregated across every module's own
+    # suppressed_by_category, all read from the single persisted passive state.
+    await persister.set_passive_scanner_state({
+        "csp": {"suppressed_by_category": {"Content Security Policy Configuration": 5, "HSTS": 1}},
+        "https_redirect": {"suppressed_by_category": {"HSTS": 1}},
+        "cookie_flags": {"occurrences": {"x": 1}},  # no suppressions -> contributes nothing
+    })
     assert await persister.get_suppressed_findings() == {
         "Content Security Policy Configuration": 5,
         "HSTS": 2,
     }
 
+    await persister.close()
+
+
+@pytest.mark.asyncio
+async def test_passive_scanner_state_round_trip():
+    try:
+        os.unlink("/tmp/passive_state.db")
+    except FileNotFoundError:
+        pass
+
+    persister = SqlPersister("/tmp/passive_state.db")
+    await persister.create()
+
+    # No state stored yet
+    assert await persister.get_passive_scanner_state() == {}
+
+    state = {
+        "csp": {"occurrences": {"a": 1, "b": 1}, "suppressed_findings": 2,
+                "suppressed_by_category": {"CSP": 2}},
+        "https_redirect": {"occurrences": {"example.com": 1}, "suppressed_findings": 0,
+                            "suppressed_by_category": {}},
+    }
+    await persister.set_passive_scanner_state(state)
+    assert await persister.get_passive_scanner_state() == state
+
     # Writing again overwrites the previous value (upsert on the key)
-    await persister.set_suppressed_findings({"HSTS": 3})
-    assert await persister.get_suppressed_findings() == {"HSTS": 3}
+    await persister.set_passive_scanner_state({"csp": {"occurrences": {"c": 1}}})
+    assert await persister.get_passive_scanner_state() == {"csp": {"occurrences": {"c": 1}}}
 
     await persister.close()

@@ -66,5 +66,27 @@ class PassiveModule:
         self._occurrences[key] += 1
         return True
 
+    def get_state(self) -> dict:
+        """Serializable snapshot of the anti-flood state.
+
+        A resumed crawl (``--resume-crawl``) re-instantiates every module with an
+        empty state. Without restoring this snapshot the module would treat keys it
+        already capped during the interrupted run as unseen and re-emit duplicate
+        alerts, while the suppression counters would restart from zero. The
+        deduplication keys are the callers' identifiers (hashes, hosts, strings) so
+        the whole snapshot is JSON-friendly.
+        """
+        return {
+            "occurrences": dict(self._occurrences),
+            "suppressed_findings": self.suppressed_findings,
+            "suppressed_by_category": dict(self.suppressed_by_category),
+        }
+
+    def load_state(self, state: dict) -> None:
+        """Restore a snapshot previously produced by :meth:`get_state`."""
+        self._occurrences = defaultdict(int, state.get("occurrences", {}))
+        self.suppressed_findings = state.get("suppressed_findings", 0)
+        self.suppressed_by_category = defaultdict(int, state.get("suppressed_by_category", {}))
+
     def analyze(self, request: Request, response: Response) -> Generator[VulnerabilityInstance, Any, None]:
         raise NotImplementedError

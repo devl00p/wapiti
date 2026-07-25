@@ -60,3 +60,36 @@ def test_suppressions_without_category_only_bump_the_total():
 
     assert module.suppressed_findings == 1
     assert dict(module.suppressed_by_category) == {}
+
+
+def test_state_round_trip_preserves_dedup_and_counters():
+    module = PassiveModule()
+
+    module.should_report("a", _FindingA)  # reported, occurrences[a] = 1
+    module.should_report("a", _FindingA)  # suppressed
+    module.should_report("b", _FindingB)  # reported
+
+    state = module.get_state()
+
+    # A fresh module loaded with that state must behave as the original: the
+    # already-seen keys stay capped and the counters are preserved.
+    restored = PassiveModule()
+    restored.load_state(state)
+
+    assert restored.suppressed_findings == 1
+    assert dict(restored.suppressed_by_category) == {"Category A": 1}
+    # Key "a" already reached LIMIT -> still suppressed (no duplicate alert on resume)
+    assert restored.should_report("a", _FindingA) is False
+    # Key "b" reported once -> now capped too
+    assert restored.should_report("b", _FindingB) is False
+    assert restored.suppressed_findings == 3
+
+
+def test_load_state_tolerates_missing_keys():
+    module = PassiveModule()
+    module.load_state({})
+
+    assert dict(module._occurrences) == {}
+    assert module.suppressed_findings == 0
+    assert dict(module.suppressed_by_category) == {}
+    assert module.should_report("fresh") is True

@@ -1,5 +1,4 @@
 import types
-from collections import defaultdict
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 from pathlib import Path
 
@@ -69,47 +68,78 @@ def test_log_summary_stays_silent_when_nothing_suppressed(mock_log_blue, _, mock
 
 
 @patch("pathlib.Path.glob", return_value=[])
-def test_suppressed_by_category_aggregates_modules(_, mock_persister):
-    """Per-module category counters are summed into a single per-category breakdown."""
+def test_get_state_snapshots_every_module(_, mock_persister):
     scanner = PassiveScanner(persister=mock_persister)
 
     first = MagicMock()
-    first.suppressed_by_category = defaultdict(int, {"CSP": 2, "HSTS": 1})
+    first.get_state.return_value = {"occurrences": {"a": 1}}
     second = MagicMock()
-    second.suppressed_by_category = defaultdict(int, {"CSP": 3})
+    second.get_state.return_value = {"occurrences": {}}
     scanner._modules = {"csp": first, "https_redirect": second}
 
-    assert scanner.suppressed_by_category() == {"CSP": 5, "HSTS": 1}
+    assert scanner.get_state() == {
+        "csp": {"occurrences": {"a": 1}},
+        "https_redirect": {"occurrences": {}},
+    }
+
+
+@patch("pathlib.Path.glob", return_value=[])
+def test_load_state_dispatches_and_ignores_unknown_modules(_, mock_persister):
+    scanner = PassiveScanner(persister=mock_persister)
+
+    csp = MagicMock()
+    scanner._modules = {"csp": csp}
+
+    scanner.load_state({"csp": {"occurrences": {"a": 1}}, "gone": {"occurrences": {}}})
+
+    csp.load_state.assert_called_once_with({"occurrences": {"a": 1}})
 
 
 @pytest.mark.asyncio
 @patch("pathlib.Path.glob", return_value=[])
-async def test_persist_suppressed_findings_writes_non_empty_counts(_, mock_persister):
-    mock_persister.set_suppressed_findings = AsyncMock()
+async def test_persist_state_writes_full_snapshot_unconditionally(_, mock_persister):
+    mock_persister.set_passive_scanner_state = AsyncMock()
     scanner = PassiveScanner(persister=mock_persister)
 
     module = MagicMock()
-    module.suppressed_by_category = defaultdict(int, {"CSP": 4})
+    module.get_state.return_value = {"occurrences": {"a": 1}, "suppressed_findings": 0}
     scanner._modules = {"csp": module}
 
-    await scanner.persist_suppressed_findings()
+    await scanner.persist_state()
 
-    mock_persister.set_suppressed_findings.assert_awaited_once_with({"CSP": 4})
+    mock_persister.set_passive_scanner_state.assert_awaited_once_with(
+        {"csp": {"occurrences": {"a": 1}, "suppressed_findings": 0}}
+    )
 
 
 @pytest.mark.asyncio
 @patch("pathlib.Path.glob", return_value=[])
-async def test_persist_suppressed_findings_skips_when_nothing_suppressed(_, mock_persister):
-    mock_persister.set_suppressed_findings = AsyncMock()
+async def test_restore_state_loads_stored_snapshot(_, mock_persister):
+    mock_persister.get_passive_scanner_state = AsyncMock(
+        return_value={"csp": {"occurrences": {"a": 1}}}
+    )
     scanner = PassiveScanner(persister=mock_persister)
 
     module = MagicMock()
-    module.suppressed_by_category = defaultdict(int)
     scanner._modules = {"csp": module}
 
-    await scanner.persist_suppressed_findings()
+    await scanner.restore_state()
 
-    mock_persister.set_suppressed_findings.assert_not_awaited()
+    module.load_state.assert_called_once_with({"occurrences": {"a": 1}})
+
+
+@pytest.mark.asyncio
+@patch("pathlib.Path.glob", return_value=[])
+async def test_restore_state_is_a_noop_without_stored_state(_, mock_persister):
+    mock_persister.get_passive_scanner_state = AsyncMock(return_value={})
+    scanner = PassiveScanner(persister=mock_persister)
+
+    module = MagicMock()
+    scanner._modules = {"csp": module}
+
+    await scanner.restore_state()
+
+    module.load_state.assert_not_called()
 
 
 @patch("pathlib.Path.glob", return_value=[Path("mod_broken.py")])

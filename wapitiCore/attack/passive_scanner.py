@@ -1,4 +1,3 @@
-from collections import defaultdict
 from importlib import import_module
 from pathlib import Path
 from typing import Dict
@@ -75,30 +74,41 @@ class PassiveScanner:
         for module_name, suppressed in suppressed_by_module.items():
             log_blue("    {0}: {1} similar alert(s) suppressed", module_name, suppressed)
 
-    def suppressed_by_category(self) -> Dict[str, int]:
-        """Total number of suppressed alerts, broken down per vulnerability category.
+    def get_state(self) -> Dict[str, dict]:
+        """Snapshot every module's anti-flood state, keyed by module name."""
+        return {
+            module_name: module_instance.get_state()
+            for module_name, module_instance in self._modules.items()
+        }
 
-        Aggregates every module's ``suppressed_by_category`` counter. The report
-        is organized per category (finding class), not per module, so this is the
-        breakdown a report needs to annotate the right summary line and section.
+    def load_state(self, state: Dict[str, dict]):
+        """Restore a snapshot produced by :meth:`get_state` into the loaded modules.
+
+        Unknown module names in the snapshot (e.g. a module removed since the
+        interrupted run) are ignored so a resume never fails on a stale state.
         """
-        totals: Dict[str, int] = defaultdict(int)
-        for module_instance in self._modules.values():
-            for category, count in getattr(module_instance, "suppressed_by_category", {}).items():
-                totals[category] += count
-        return dict(totals)
+        for module_name, module_state in state.items():
+            module_instance = self._modules.get(module_name)
+            if module_instance is not None:
+                module_instance.load_state(module_state)
 
-    async def persist_suppressed_findings(self):
-        """Store the per-category suppression counts so the report survives the crawl.
+    async def persist_state(self):
+        """Store the passive scanner state so both the resume and the report survive the crawl.
 
-        The report is generated in a later, possibly decoupled step (e.g. a resumed
-        scan with ``--skip-crawl``, or regenerating a report from the ``.db`` file),
-        when the in-memory module counters are gone. Persisting them keeps the
-        information available to every report format.
+        This is the single source of truth for everything the passive scanner
+        accumulates: the per-key occurrence counts (so a resumed crawl keeps
+        deduplicating instead of re-reporting already-seen alerts) and the
+        per-category suppression counters (which the report derives from this same
+        state, see ``SqlPersister.get_suppressed_findings``). Written unconditionally
+        so the occurrence counts survive even when nothing was suppressed yet.
         """
-        counts = self.suppressed_by_category()
-        if counts:
-            await self._persister.set_suppressed_findings(counts)
+        await self._persister.set_passive_scanner_state(self.get_state())
+
+    async def restore_state(self):
+        """Reload the passive scanner state persisted by a previous (interrupted) crawl."""
+        state = await self._persister.get_passive_scanner_state()
+        if state:
+            self.load_state(state)
 
     async def _record_vulnerability_instance(self, vuln_instance: VulnerabilityInstance, module: str):
         await self._persister.add_payload(
