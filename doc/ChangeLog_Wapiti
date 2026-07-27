@@ -1,3 +1,32 @@
+27/07/2026
+    Wapiti 3.3.1
+    Security: fix a stored XSS in the HTML report, target-controlled login form field names were rendered unescaped (CWE-79)
+    Modules: new passive module stacktrace_disclosure, detecting leaked stack traces for Python, PHP, Java, .NET (YSOD), Node.js, Ruby and Go
+    Modules: mod_csp now detects unknown directives and checks frame-ancestors and form-action
+    Modules: mod_sql boolean-based detection made robust to dynamic pages and rate-limiting, added an OR-based technique
+    Modules: mod_ssrf reports timeouts and HTTP 500 anomalies
+    Modules: mod_buster warns once per host when the server rate-limits the scan
+    Modules: faster DNS verification in mod_log4shell
+    Attack: new PassiveModule base class with a per-key alert cap and a suppression counter shared by all passive modules
+    Attack: csp and http_headers now report distinct postures per host instead of a single finding for the whole site (#617)
+    Report: number of alerts suppressed by passive modules is now reported per vulnerability category (txt, markdown, html, json, xml)
+    Core: apply a read timeout so a stalled response can no longer hang the scan (#797)
+    Core: cap repeated parameter occurrences in crawled URLs (#252)
+    Core: in headless mode, seed hosts uncovered by the interception layer so host-level modules (ssl, http_headers...) still run
+    Core: passive deduplication state is persisted and restored across --resume-crawl
+    Core: update dependencies (aiosqlite, mitmproxy) and dev tooling
+    CLI: fix a hang on Ctrl+C during an attack (#802)
+    Fixes: mod_buster no longer reports soft 404s, catch-all redirections and 5xx responses as discovered pages
+    Fixes: mod_methods logs the tested path and no longer emits empty findings
+    Fixes: fix a RuntimeError in mod_xxe when an OOB-vulnerable parameter is skipped
+    Fixes: reduced false positives in the inconsistent_redirection, information_disclosure and stacktrace_disclosure passive modules
+    Fixes: cleartext password findings are deduplicated per page instead of per URL, no longer flooding reports
+    Fixes: fix cookie domain mismatch for dotless local hostnames
+    Fixes: fix an IndexError on root URLs without a trailing slash
+    Fixes: fix XSS attribute parsing on Python 3.12+ / 3.13+
+    Fixes: silence the BeautifulSoup XMLParsedAsHTMLWarning during parsing
+    doc: fix dead OWASP WSTG, OWASP and KeyCDN reference links
+
 13/05/2026
     Wapiti 3.3.0
     Modules: new mod_printer to detect HP and EPSON printers
