@@ -42,7 +42,7 @@ from wapitiCore.net.classes import CrawlerConfiguration
 from wapitiCore.net.crawler import AsyncCrawler
 from wapitiCore.net import jsparser_angular
 from wapitiCore.net.scope import Scope, wildcard_translate
-from wapitiCore.net.soft_404 import is_false_positive
+from wapitiCore.net.soft_404 import is_false_positive, probe_dir_name
 from wapitiCore.net.web import urlparse
 
 MIME_TEXT_TYPES = ('text/', 'application/xml')
@@ -317,6 +317,7 @@ class Explorer:
         serialize every concurrent task in the crawler behind that single probe
         (this is why the previous attempt at this feature was reverted, see #132).
         """
+        dir_name = probe_dir_name(dir_name)
         async with self._shared_lock:
             task = self._dir_probes.get(dir_name)
             if task is None:
