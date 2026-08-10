@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # This file is part of the Wapiti project (https://wapiti-scanner.github.io)
-# Copyright (C) 2023 Nicolas SURRIBAS
+# Copyright (C) 2026 Nicolas SURRIBAS
 # Copyright (C) 2024 Cyberwatch
 #
 # This program is free software; you can redistribute it and/or modify
@@ -21,7 +21,9 @@ import asyncio
 from collections import defaultdict
 import pickle
 import math
-from typing import Tuple, List, Optional, AsyncIterator, Deque
+import random
+import string
+from typing import Dict, Tuple, List, Optional, AsyncIterator, Deque
 import re
 from http.cookiejar import CookieJar
 
@@ -40,6 +42,7 @@ from wapitiCore.net.classes import CrawlerConfiguration
 from wapitiCore.net.crawler import AsyncCrawler
 from wapitiCore.net import jsparser_angular
 from wapitiCore.net.scope import Scope, wildcard_translate
+from wapitiCore.net.soft_404 import is_false_positive
 from wapitiCore.net.web import urlparse
 
 MIME_TEXT_TYPES = ('text/', 'application/xml')
@@ -108,7 +111,11 @@ class Explorer:
         # Locking required for writing to the following structures
         self._file_counts = defaultdict(int)
         self._pattern_counts = defaultdict(int)
-        self._custom_404_codes = {}
+        # One soft-404 probe task per directory, cached so concurrent requests share it
+        # instead of each firing their own (not persisted across --resume-crawl: re-probing
+        # a handful of directories on resume is cheap, and asyncio Task/Response objects
+        # aren't picklable anyway).
+        self._dir_probes: Dict[str, asyncio.Task] = {}
         # Corresponding lock
         self._shared_lock = asyncio.Lock()
 
@@ -171,7 +178,6 @@ class Explorer:
         with open(pickle_file, "wb") as file_data:
             pickle.dump(
                 {
-                    "custom_404_codes": self._custom_404_codes,
                     "file_counts": self._file_counts,
                     "pattern_counts": self._pattern_counts,
                     "hostnames": self._hostnames
@@ -184,7 +190,6 @@ class Explorer:
         try:
             with open(pickle_file, "rb") as file_data:
                 data = pickle.load(file_data)
-                self._custom_404_codes = data["custom_404_codes"]
                 self._file_counts = data["file_counts"]
                 self._pattern_counts = data["pattern_counts"]
                 self._hostnames = data["hostnames"]
@@ -295,25 +300,48 @@ class Explorer:
 
         return new_requests
 
-    async def _async_analyze(self, request) -> Tuple[bool, List, Optional[Response]]:
+    async def _probe_dir_soft_404(self, dir_name: str) -> Response:
+        """Fetch an improbable resource in `dir_name` to learn how the server answers
+        unknown paths there (soft 404 / SPA catch-all page, see issue #808)."""
+        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=10))
+        invalid_resource = web.Request(dir_name + "zqxj" + suffix)
+        return await self._crawler.async_send(invalid_resource)
+
+    async def _get_soft_404_response(self, dir_name: str) -> Optional[Response]:
+        """Return the cached soft-404 baseline response for `dir_name`, probing it
+        once (the first caller starts the probe, later callers for the same
+        directory await the same task instead of firing their own).
+
+        The lock only guards the dict lookup/insertion, never the network call
+        itself: holding a shared lock across an await on a HTTP request would
+        serialize every concurrent task in the crawler behind that single probe
+        (this is why the previous attempt at this feature was reverted, see #132).
+        """
+        async with self._shared_lock:
+            task = self._dir_probes.get(dir_name)
+            if task is None:
+                task = asyncio.create_task(self._probe_dir_soft_404(dir_name))
+                self._dir_probes[dir_name] = task
+
+        try:
+            return await task
+        except (ConnectionError, httpx.RequestError):
+            # Could not establish a baseline for this directory: fail open, every
+            # response there will be treated as a legitimate resource.
+            return None
+
+    async def _async_analyze(self, request, is_seed: bool = False) -> Tuple[bool, List, Optional[Response]]:
         async with self._sem:
             self._processed_requests.add(request)  # thread safe
 
             log_verbose(f"[+] {request}")
 
             dir_name = request.dir_name
-            # Currently not exploited. Would be interesting though but then it should be implemented separately
-            # Maybe in another task as we don't want to spend to much time in this function
-            # async with self._shared_lock:
-            #     # lock to prevent launching duplicates requests that would otherwise waste time
-            #     if dir_name not in self._custom_404_codes:
-            #         invalid_page = "zqxj{0}.html".format("".join([choice(ascii_letters) for __ in range(10)]))
-            #         invalid_resource = web.Request(dir_name + invalid_page)
-            #         try:
-            #             page = await self._crawler.async_get(invalid_resource)
-            #             self._custom_404_codes[dir_name] = page.status
-            #         except httpx.RequestError:
-            #             pass
+            # Started concurrently with the real request below (not awaited yet): the
+            # only extra latency this can add is for the very first request landing in
+            # a given directory, and even then it is bounded by max(probe, request)
+            # rather than their sum.
+            soft_404_task = asyncio.ensure_future(self._get_soft_404_response(dir_name))
 
             self._hostnames.add(request.hostname)
 
@@ -351,6 +379,21 @@ class Explorer:
                 if response.raw_size > self._max_page_size:
                     return False, [], response
 
+            not_found_response = await soft_404_task
+            if (
+                not is_seed
+                and not_found_response is not None
+                and is_false_positive(response, not_found_response)
+            ):
+                # Same status/body (or same redirect target) as an improbable path in the
+                # same directory: this is a soft 404 or a SPA catch-all page, not a real
+                # resource. Don't persist it and don't extract links from it either, or
+                # the crawler would keep rediscovering the same shell page forever.
+                # Requests explicitly given as scan targets (is_seed) are never dropped
+                # this way, even if the target itself happens to be a catch-all page.
+                log_verbose(f"[~] {request} looks like a soft 404 / catch-all page, skipping")
+                return False, [], response
+
             await asyncio.sleep(0)
             resources = self.extract_links(response, request)
             # TODO: there's more situations where we would not want to attack the resource... must check this
@@ -384,6 +427,11 @@ class Explorer:
         task_to_request = {}
         # Shadow set for O(1) lookups on to_explore deque
         to_explore_set = set(to_explore)
+        # URLs explicitly given to this call (CLI targets, or previously saved but not yet
+        # browsed URLs on --resume-crawl) must always be kept regardless of the soft-404
+        # check below, or a SPA target whose real pages all look like its own catch-all
+        # page would end up with nothing crawled at all.
+        seed_requests = frozenset(to_explore_set)
 
         while True:
             while to_explore:
@@ -417,7 +465,7 @@ class Explorer:
                 if self.is_forbidden(resource_url):
                     continue
 
-                task = asyncio.create_task(self._async_analyze(request))
+                task = asyncio.create_task(self._async_analyze(request, request in seed_requests))
                 task_to_request[task] = request
 
             if task_to_request:
