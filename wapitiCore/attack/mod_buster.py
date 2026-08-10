@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #
 # This file is part of the Wapiti project (https://wapiti-scanner.github.io)
-# Copyright (C) 2014-2023 Nicolas Surribas
+# Copyright (C) 2014-2026 Nicolas Surribas
 # Copyright (C) 2023-2024 Cyberwatch
 #
 # This program is free software; you can redistribute it and/or modify
@@ -20,7 +20,6 @@
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 import asyncio
 from collections import defaultdict
-from difflib import SequenceMatcher
 from os.path import join as path_join
 from typing import Optional
 
@@ -29,40 +28,8 @@ from httpx import RequestError
 from wapitiCore.main.log import log_red, log_orange, log_verbose
 from wapitiCore.attack.attack import Attack, random_string
 from wapitiCore.net import Request, Response
+from wapitiCore.net.soft_404 import is_false_positive
 from wapitiCore.definitions.buster import BusterFinding
-
-# Above this similarity ratio, a candidate response is considered a mere copy of
-# the server's generic "not found" page (soft 404).
-SIMILARITY_THRESHOLD = 0.9
-
-
-def responses_are_similar(response1: str, response2: str) -> bool:
-    """Return True when the two response bodies are near-identical."""
-    return SequenceMatcher(None, response1, response2).quick_ratio() > SIMILARITY_THRESHOLD
-
-
-def is_false_positive(response: Response, not_found_response: Response) -> bool:
-    """
-    Return True when `response` merely replays the generic "not found" answer of the
-    server, captured in `not_found_response` by requesting an improbable resource.
-
-    This catches two common setups that would otherwise flood the results:
-      - catch-all redirection: any unknown path is redirected to the same location;
-      - soft 404: any unknown path returns a 200 with the same "not found" body.
-    """
-    # Catch-all redirection: both the improbable path and the candidate are
-    # redirected to the very same location.
-    if response.redirection_url and not_found_response.redirection_url:
-        return response.redirection_url == not_found_response.redirection_url
-
-    # Soft 404: same status code and a near-identical body as the improbable path.
-    if not response.redirection_url and not not_found_response.redirection_url:
-        return (
-            response.status == not_found_response.status
-            and responses_are_similar(response.content, not_found_response.content)
-        )
-
-    return False
 
 
 class ModuleBuster(Attack):
